@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+export NCCL_P2P_DISABLE=1
+export NCCL_IB_DISABLE=1  # 如果没有 InfiniBand，建议加上这个
+
 # =================================================================
 # Wrapper Script for Countdown Task PPO Training
 # =================================================================
