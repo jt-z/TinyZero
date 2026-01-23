@@ -54,3 +54,16 @@
 *   训练脚本开始执行，但最终因 `wandb.errors.errors.UsageError: No API key configured. Use 'wandb login' to log in.` 错误而中止。
 *   **需要用户干预**：用户需要登录 Weights & Biases (W&B) 以提供 API Key，以便训练过程中的日志记录功能正常工作。
 *   同时注意到了一些警告信息，如 `NCCL WARN Failed to find CUDA library libcuda.so` 和 `Flash Attention 2.0 only supports torch.float16 and torch.bfloat16 dtypes`，这些可能需要在 W&B 问题解决后进一步关注。
+
+### 7. 再次尝试训练及新问题
+*   在用户解决 `wandb` 登录问题后，再次启动训练，`wandb` 日志已正常工作。
+*   然而，训练过程在模型初始化阶段再次中止，报错信息为 `torch._dynamo.exc.BackendCompilerFailed`，其中包含了 `/usr/bin/ld: cannot find -lcuda: No such file or directory`。
+*   **问题分析**：这个错误表明系统在编译 CUDA 相关代码（可能由 Triton 或 `torch.compile` 使用）时，无法找到 CUDA 库 `libcuda.so`。这通常是由于 CUDA Toolkit 未正确安装、`libcuda.so` 文件缺失或其路径未添加到系统 `LD_LIBRARY_PATH` 环境变量中导致的系统级配置问题。
+*   **解决方案**：
+    1.  **确认 CUDA Toolkit 安装**：用户需要确保系统上已正确安装了与 PyTorch 和 Triton 兼容的 CUDA Toolkit 版本。
+    2.  **检查 `libcuda.so` 存在性**：确认 `libcuda.so` 文件存在于 CUDA 安装目录（通常在 `/usr/local/cuda/lib64` 或类似路径）。
+    3.  **配置 `LD_LIBRARY_PATH`**：确保 `LD_LIBRARY_PATH` 环境变量包含 `libcuda.so` 所在的目录。例如：
+        ```bash
+        export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+        ```
+        （请根据实际 CUDA 安装路径进行调整）
