@@ -1,14 +1,15 @@
 #!/bin/bash
 
-echo "Starting train_tiny_zero.sh script (Fixed Global Batch Sizes)..."
+echo "Starting train_tiny_zero.sh script (Ultra-Safe Mode)..."
 
 # [环境配置]
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export NCCL_P2P_DISABLE=1
 
 # [Batch Size 计算公式 (8卡)]
-# 我们希望单卡实际跑: Micro=4, Mini=16
-# 所以全局配置要是:   Micro=32, Mini=128
+# 策略：极致求稳，单卡 Micro Batch = 1
+# Global Micro Batch = 1 * 8 = 8
+# Global Mini Batch = 64 or 128 (保持 128 以维持收敛性)
 
 python3 -m verl.trainer.main_ppo \
     data.train_files=$DATA_DIR/train.parquet \
@@ -23,18 +24,18 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.ppo_mini_batch_size=128 \
-    actor_rollout_ref.actor.ppo_micro_batch_size=32 \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size=32 \
+    actor_rollout_ref.actor.ppo_micro_batch_size=8 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size=8 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
-    actor_rollout_ref.ref.log_prob_micro_batch_size=32 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.2 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size=8 \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
     critic.optim.lr=1e-5 \
     critic.model.path=$BASE_MODEL \
-    critic.ppo_micro_batch_size=32 \
+    critic.ppo_micro_batch_size=8 \
     critic.model.enable_gradient_checkpointing=True \
     algorithm.kl_ctrl.kl_coef=0.001 \
     trainer.logger=['wandb'] \
