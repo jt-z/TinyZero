@@ -1,16 +1,16 @@
 #!/bin/bash
 
-echo "Starting train_tiny_zero.sh script (vLLM=0.1 + Optimizer Offload Only)..."
+echo "Starting train_tiny_zero.sh script (Final: All-In GPU, No Offload)..."
 
 # [环境配置]
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export NCCL_P2P_DISABLE=1
-# 彻底杜绝 Ray 误杀进程
+# 内存不应该再爆了，但为了保险还是关掉 Ray 的自动查杀
 export RAY_memory_monitor_refresh_ms=0
 
-# [Batch Size 策略: 单卡 Batch = 1]
-# Global Micro = 8  / 8 GPUs = 1 (单卡)
-# Global Mini = 128 / 8 GPUs = 16 (单卡梯度累积)
+# [Batch Size 策略]
+# Global Micro = 8  (单卡 Batch = 1)
+# Global Mini = 128
 
 python3 -m verl.trainer.main_ppo \
     data.train_files=$DATA_DIR/train.parquet \
@@ -31,14 +31,14 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.1 \
     actor_rollout_ref.ref.log_prob_micro_batch_size=8 \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
     critic.optim.lr=1e-5 \
     critic.model.path=$BASE_MODEL \
     critic.ppo_micro_batch_size=8 \
     critic.model.enable_gradient_checkpointing=True \
-    critic.model.fsdp_config.optimizer_offload=True \
+    critic.model.fsdp_config.optimizer_offload=False \
     critic.model.fsdp_config.param_offload=False \
     algorithm.kl_ctrl.kl_coef=0.001 \
     trainer.logger=['wandb'] \
