@@ -1,3 +1,4 @@
+echo "Starting train_tiny_zero.sh script..."
 python3 -m verl.trainer.main_ppo \
 data.train_files=$DATA_DIR/train.parquet \
 data.val_files=$DATA_DIR/test.parquet \
