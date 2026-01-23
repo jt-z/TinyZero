@@ -1,18 +1,16 @@
 #!/bin/bash
 
-echo "Starting train_tiny_zero.sh script (The Golden Balance: 0.15 + Params on GPU)..."
+echo "Starting train_tiny_zero.sh script (All-In GPU + Length Clip)..."
 
 # [环境配置]
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export NCCL_P2P_DISABLE=1
-
-# [关键：防止 Ray 因为瞬时内存波动误杀进程]
-# 设置为 0 禁止内存杀手，或者设置为一个很高的值
 export RAY_memory_monitor_refresh_ms=0
 
-# [Batch Size 策略]
-# 目标：单卡 Micro Batch = 1
-# Global = 1 * 8 = 8
+# [策略说明]
+# 1. 关闭所有 Offload -> 救内存 (RAM)
+# 2. vLLM 压到 0.1 -> 救显存 (VRAM)
+# 3. 长度砍到 896 -> 显存的最后一道保险
 
 python3 -m verl.trainer.main_ppo \
     data.train_files=$DATA_DIR/train.parquet \
@@ -20,7 +18,7 @@ python3 -m verl.trainer.main_ppo \
     data.train_batch_size=128 \
     data.val_batch_size=1312 \
     data.max_prompt_length=256 \
-    data.max_response_length=1024 \
+    data.max_response_length=896 \
     actor_rollout_ref.model.path=$BASE_MODEL \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
@@ -31,16 +29,16 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.log_prob_micro_batch_size=8 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.15 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.1 \
     actor_rollout_ref.ref.log_prob_micro_batch_size=8 \
-    actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
+    actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
     critic.optim.lr=1e-5 \
     critic.model.path=$BASE_MODEL \
     critic.ppo_micro_batch_size=8 \
     critic.model.enable_gradient_checkpointing=True \
-    critic.model.fsdp_config.optimizer_offload=True \
+    critic.model.fsdp_config.optimizer_offload=False \
     critic.model.fsdp_config.param_offload=False \
     algorithm.kl_ctrl.kl_coef=0.001 \
     trainer.logger=['wandb'] \
