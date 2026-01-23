@@ -1,15 +1,14 @@
 #!/bin/bash
 
-echo "Starting train_tiny_zero.sh script (Ultra-Safe Mode)..."
+echo "Starting train_tiny_zero.sh script (Final Resort: Full Offload)..."
 
 # [环境配置]
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export NCCL_P2P_DISABLE=1
 
-# [Batch Size 计算公式 (8卡)]
-# 策略：极致求稳，单卡 Micro Batch = 1
-# Global Micro Batch = 1 * 8 = 8
-# Global Mini Batch = 64 or 128 (保持 128 以维持收敛性)
+# [Batch Size 配置]
+# Global Micro = 8 (单卡=1)
+# Global Mini = 128 (保持梯度稳定性)
 
 python3 -m verl.trainer.main_ppo \
     data.train_files=$DATA_DIR/train.parquet \
@@ -31,12 +30,14 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.2 \
     actor_rollout_ref.ref.log_prob_micro_batch_size=8 \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
-    actor_rollout_ref.actor.fsdp_config.param_offload=False \
-    actor_rollout_ref.ref.fsdp_config.param_offload=False \
+    actor_rollout_ref.actor.fsdp_config.param_offload=True \
+    actor_rollout_ref.ref.fsdp_config.param_offload=True \
     critic.optim.lr=1e-5 \
     critic.model.path=$BASE_MODEL \
     critic.ppo_micro_batch_size=8 \
     critic.model.enable_gradient_checkpointing=True \
+    critic.model.fsdp_config.optimizer_offload=True \
+    critic.model.fsdp_config.param_offload=True \
     algorithm.kl_ctrl.kl_coef=0.001 \
     trainer.logger=['wandb'] \
     +trainer.val_before_train=False \
