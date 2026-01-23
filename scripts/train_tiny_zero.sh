@@ -1,4 +1,4 @@
-echo "Starting train_tiny_zero.sh script with CPU Offload..."
+echo "Starting train_tiny_zero.sh script with CPU Offload (Corrected)..."
 
 # 3B 模型必须使用 TP=1
 export NCCL_P2P_DISABLE=1
@@ -41,6 +41,5 @@ trainer.project_name=TinyZero \
 trainer.experiment_name=$EXPERIMENT_NAME \
 trainer.total_epochs=15 \
 actor_rollout_ref.actor.fsdp_config.optimizer_offload=True \
-actor_rollout_ref.ref.fsdp_config.optimizer_offload=True \
 actor_rollout_ref.actor.fsdp_config.param_offload=False \
 actor_rollout_ref.ref.fsdp_config.param_offload=False 2>&1 | tee verl_demo.log
