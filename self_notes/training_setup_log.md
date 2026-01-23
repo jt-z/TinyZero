@@ -93,12 +93,21 @@
 2.  **Weights & Biases (wandb) 登录问题已解决:**
     *   `wandb` 的认证问题已解决，日志系统现在可以正常工作。
 
-3.  **核心阻塞问题：CUDA 库链接错误 (`-lcuda not found`)**
-    *   在尝试启动训练时，系统报告无法找到 `libcuda.so` 库。这导致了 `torch._dynamo.exc.BackendCompilerFailed` 错误，训练无法进行。
-    *   这个错误表明您的系统 CUDA 环境配置不完整，可能缺少 `libcuda.so` 文件，或者其路径未添加到系统 `LD_LIBRARY_PATH` 环境变量中导致的系统级配置问题。
-    *   **已通过简单 CUDA 测试确认 PyTorch 基本 CUDA 运行时功能正常，问题出在 `torch.compile` 的编译链接阶段。**
+3.  **核心阻塞问题：CUDA 库链接问题 (`-lcuda not found`) 已解决**：通过在 `/usr/lib/x86_64-linux-gnu/` 中创建 `libcuda.so` 到 `libcuda.so.1` 的软链接成功解决。
+
+4.  **最新问题：CUDA 内存不足 (Out of Memory - OOM)**：在解决了 `libcuda.so` 链接问题后，训练脚本成功启动并加载模型，但随后报错 `torch.OutOfMemoryError: CUDA out of memory`。
+    *   **诊断**：日志显示 GPU 0 的总显存容量为 23.56 GiB，但进程已使用了 23.46 GiB，仅剩 85.00 MiB 可用。这表明模型和/或批处理大小对于当前的 GPU 显存来说过大。
+    *   **解决方案 (建议尝试顺序)**：
+        1.  **减少 `train_batch_size` 和 `ppo_mini_batch_size`**：这是最直接有效的减小显存占用的方法。
+            *   将 `data.train_batch_size` 从 `256` 减小到 `128`。
+            *   将 `actor_rollout_ref.actor.ppo_mini_batch_size` 从 `64` 减小到 `32`。
+        2.  **启用 Actor 模型的梯度检查点 (`enable_gradient_checkpointing`)**：这会以计算时间换取显存。
+            *   添加 `actor_rollout_ref.model.enable_gradient_checkpointing=True`。
+        3.  **考虑使用更低精度的浮点类型**：日志中的警告 `Flash Attention 2.0 only supports torch.float16 and torch.bfloat16 dtypes, but the current dype in Qwen2ForTokenClassification is torch.float32` 表明模型可能以 `float32` 载入。切换到 `bfloat16` 或 `float16` 可以显著降低显存占用。
+            *   这通常通过在模型加载时设置 `torch_dtype` 参数或使用 PyTorch 的自动混合精度（AMP）实现。
+        4.  **进一步减少 `max_prompt_length` 或 `max_response_length`**：如果上述方法不足以解决问题，可以考虑缩短序列长度。
 
 **结论:**
 
-为了能够顺利进行训练，首要任务是解决 CUDA 编译/链接时的环境配置问题，特别是确保 `LD_LIBRARY_PATH` 环境变量正确设置。详细的错误信息和建议的解决方案已记录在上述“7. 再次尝试训练及新问题”部分。一旦 CUDA 环境问题解决，我们就可以再次尝试启动训练，届时将会有实际的训练结果和 `wandb` 上的详细日志。
+下一步是根据上述“10. 最新问题：CUDA 内存不足”中的建议，修改训练配置参数以减少显存占用，从而允许训练正常启动。
 
