@@ -252,5 +252,9 @@ class DataParallelPPOCritic(BasePPOCritic):
         for key, value in batch_end_memory.items():
             metrics[f'critic/{key}'] = value
         
+        # Add memory metrics from optimizer step
+        for key, value in memory_metrics.items():
+            metrics[f'critic/optimizer_step_{key}'] = value
+        
         self.critic_optimizer.zero_grad()
         return metrics

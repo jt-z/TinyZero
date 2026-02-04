@@ -334,5 +334,9 @@ class DataParallelPPOActor(BasePPOActor):
         for key, value in batch_end_memory.items():
             metrics[f'actor/{key}'] = value
         
+        # Add memory metrics from optimizer step
+        for key, value in memory_metrics.items():
+            metrics[f'actor/optimizer_step_{key}'] = value
+        
         self.actor_optimizer.zero_grad()
         return metrics
