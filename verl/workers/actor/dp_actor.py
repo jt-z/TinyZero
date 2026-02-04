@@ -29,9 +29,13 @@ from verl.utils.py_functional import append_to_dict
 from verl.utils.torch_functional import logprobs_from_logits, masked_mean
 from verl.utils.ulysses import ulysses_pad_and_slice_inputs, gather_outpus_and_unpad
 from verl.utils.seqlen_balancing import rearrange_micro_batches, get_reverse_idx
+from verl.utils.debug.memory_monitor import log_detailed_memory_usage
 import verl.utils.torch_functional as verl_F
 
 from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_first_axis
+import logging
+
+logger = logging.getLogger(__name__)
 
 __all__ = ['DataParallelPPOActor']
 
@@ -228,9 +232,24 @@ class DataParallelPPOActor(BasePPOActor):
                 # split batch into micro_batches
                 micro_batches = mini_batch.split(self.config.ppo_micro_batch_size)
 
+            log_detailed_memory_usage('Before actor update, batch start', 
+                                   model=self.actor_module, 
+                                   optimizer=self.actor_optimizer, 
+                                   logger=logger)
+
             self.actor_optimizer.zero_grad()
 
-            for data in micro_batches:
+            log_detailed_memory_usage('After optimizer zero_grad', 
+                                   model=self.actor_module, 
+                                   optimizer=self.actor_optimizer, 
+                                   logger=logger)
+
+            for micro_idx, data in enumerate(micro_batches):
+                log_detailed_memory_usage(f'Before micro batch {micro_idx}', 
+                                       model=self.actor_module, 
+                                       optimizer=self.actor_optimizer, 
+                                       logger=logger)
+                
                 data = data.cuda()  # actor device is cpu when using offload
                 responses = data['responses']
                 response_length = responses.size(1)
@@ -242,8 +261,20 @@ class DataParallelPPOActor(BasePPOActor):
                 clip_ratio = self.config.clip_ratio
                 entropy_coeff = self.config.entropy_coeff
 
+                log_detailed_memory_usage(f'After data to cuda, micro batch {micro_idx}', 
+                                       model=self.actor_module, 
+                                       optimizer=self.actor_optimizer, 
+                                       active_tensors=[responses, attention_mask, old_log_prob, advantages],
+                                       logger=logger)
+
                 # all return: (bsz, response_length)
                 entropy, log_prob = self._forward_micro_batch(micro_batch=data, temperature=temperature)
+
+                log_detailed_memory_usage(f'After forward pass, micro batch {micro_idx}', 
+                                       model=self.actor_module, 
+                                       optimizer=self.actor_optimizer, 
+                                       active_tensors=[entropy, log_prob],
+                                       logger=logger)
 
                 pg_loss, pg_clipfrac, ppo_kl = core_algos.compute_policy_loss(old_log_prob=old_log_prob,
                                                                               log_prob=log_prob,
@@ -271,6 +302,11 @@ class DataParallelPPOActor(BasePPOActor):
                 loss = policy_loss / self.gradient_accumulation
                 loss.backward()
 
+                log_detailed_memory_usage(f'After backward pass, micro batch {micro_idx}', 
+                                       model=self.actor_module, 
+                                       optimizer=self.actor_optimizer, 
+                                       logger=logger)
+
                 data = {
                     'actor/entropy_loss': entropy_loss.detach().item(),
                     'actor/pg_loss': pg_loss.detach().item(),
@@ -280,7 +316,23 @@ class DataParallelPPOActor(BasePPOActor):
                 append_to_dict(metrics, data)
 
             grad_norm = self._optimizer_step()
+            memory_metrics = log_detailed_memory_usage('After optimizer step', 
+                                   model=self.actor_module, 
+                                   optimizer=self.actor_optimizer, 
+                                   logger=logger)
+
             data = {'actor/grad_norm': grad_norm.detach().item()}
             append_to_dict(metrics, data)
+        
+        torch.cuda.empty_cache()
+        batch_end_memory = log_detailed_memory_usage('After actor update, batch end', 
+                               model=self.actor_module, 
+                               optimizer=self.actor_optimizer, 
+                               logger=logger)
+        
+        # Add memory metrics to the returned metrics dict
+        for key, value in batch_end_memory.items():
+            metrics[f'actor/{key}'] = value
+        
         self.actor_optimizer.zero_grad()
         return metrics

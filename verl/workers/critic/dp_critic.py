@@ -30,8 +30,12 @@ from verl.utils.py_functional import append_to_dict
 from verl.utils.torch_functional import masked_mean
 from verl.utils.ulysses import ulysses_pad_and_slice_inputs, gather_outpus_and_unpad
 from verl.utils.seqlen_balancing import rearrange_micro_batches, get_reverse_idx
+from verl.utils.debug.memory_monitor import log_detailed_memory_usage
 
 from flash_attn.bert_padding import pad_input, unpad_input, rearrange, index_first_axis
+import logging
+
+logger = logging.getLogger(__name__)
 
 __all__ = ['DataParallelPPOCritic']
 
@@ -163,9 +167,24 @@ class DataParallelPPOCritic(BasePPOCritic):
             else:
                 micro_batches = mini_batch.split(self.config.ppo_micro_batch_size)
 
+            log_detailed_memory_usage('Before critic update, batch start', 
+                                   model=self.critic_module, 
+                                   optimizer=self.critic_optimizer, 
+                                   logger=logger)
+
             self.critic_optimizer.zero_grad()
 
-            for data in micro_batches:
+            log_detailed_memory_usage('After optimizer zero_grad', 
+                                   model=self.critic_module, 
+                                   optimizer=self.critic_optimizer, 
+                                   logger=logger)
+
+            for micro_idx, data in enumerate(micro_batches):
+                log_detailed_memory_usage(f'Before micro batch {micro_idx}', 
+                                       model=self.critic_module, 
+                                       optimizer=self.critic_optimizer, 
+                                       logger=logger)
+                
                 data = data.cuda()  # critic device is cpu when using offload
                 input_ids = data['input_ids']
                 responses = data['responses']
@@ -177,7 +196,19 @@ class DataParallelPPOCritic(BasePPOCritic):
 
                 eos_mask = attention_mask[:, -response_length - 1:-1]
 
+                log_detailed_memory_usage(f'After data to cuda, micro batch {micro_idx}', 
+                                       model=self.critic_module, 
+                                       optimizer=self.critic_optimizer, 
+                                       active_tensors=[input_ids, responses, attention_mask, position_ids, values, returns],
+                                       logger=logger)
+
                 vpreds = self._forward_micro_batch(data)
+
+                log_detailed_memory_usage(f'After forward pass, micro batch {micro_idx}', 
+                                       model=self.critic_module, 
+                                       optimizer=self.critic_optimizer, 
+                                       active_tensors=[vpreds],
+                                       logger=logger)
 
                 # assert not torch.any(torch.isnan(vpreds)).item()
 
@@ -189,6 +220,11 @@ class DataParallelPPOCritic(BasePPOCritic):
                 loss = vf_loss / self.gradient_accumulation
                 loss.backward()
 
+                log_detailed_memory_usage(f'After backward pass, micro batch {micro_idx}', 
+                                       model=self.critic_module, 
+                                       optimizer=self.critic_optimizer, 
+                                       logger=logger)
+
                 data = {
                     'critic/vf_loss': vf_loss.detach().item(),
                     'critic/vf_clipfrac': vf_clipfrac.detach().item(),
@@ -198,7 +234,23 @@ class DataParallelPPOCritic(BasePPOCritic):
                 append_to_dict(metrics, data)
 
             grad_norm = self._optimizer_step()
+            memory_metrics = log_detailed_memory_usage('After optimizer step', 
+                                   model=self.critic_module, 
+                                   optimizer=self.critic_optimizer, 
+                                   logger=logger)
+
             data = {'critic/grad_norm': grad_norm.detach().item()}
             append_to_dict(metrics, data)
+        
+        torch.cuda.empty_cache()
+        batch_end_memory = log_detailed_memory_usage('After critic update, batch end', 
+                               model=self.critic_module, 
+                               optimizer=self.critic_optimizer, 
+                               logger=logger)
+        
+        # Add memory metrics to the returned metrics dict
+        for key, value in batch_end_memory.items():
+            metrics[f'critic/{key}'] = value
+        
         self.critic_optimizer.zero_grad()
         return metrics
