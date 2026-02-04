@@ -292,6 +292,27 @@ class ActorRolloutRefWorker(Worker):
 
         use_remove_padding = self.config.model.get('use_remove_padding', False)
 
+        # check for checkpoint
+        import os
+        import re
+        checkpoint_dir = os.path.join('checkpoints/TinyZero/actor')
+        latest_checkpoint = None
+        
+        if os.path.exists(checkpoint_dir):
+            # find all global_step directories
+            step_pattern = re.compile(r'global_step_(\d+)')
+            steps = []
+            
+            for dir_name in os.listdir(checkpoint_dir):
+                match = step_pattern.match(dir_name)
+                if match:
+                    steps.append(int(match.group(1)))
+            
+            if steps:
+                latest_step = max(steps)
+                latest_checkpoint = os.path.join(checkpoint_dir, f'global_step_{latest_step}')
+                print(f'Found latest actor checkpoint: {latest_checkpoint}')
+
         if self._is_actor or self._is_rollout:
             # we need the model for actor and rollout
             if self._is_actor:
@@ -300,8 +321,12 @@ class ActorRolloutRefWorker(Worker):
             else:
                 optim_config = None
                 fsdp_config = OmegaConf.create()
+            
+            # use latest checkpoint if available
+            model_path = latest_checkpoint if latest_checkpoint else self.config.model.path
+            
             self.actor_module_fsdp, self.actor_optimizer, self.actor_lr_scheduler, self.actor_model_config = self._build_model_optimizer(
-                model_path=self.config.model.path,
+                model_path=model_path,
                 fsdp_config=fsdp_config,
                 optim_config=optim_config,
                 override_model_config=override_model_config,
@@ -537,18 +562,30 @@ class CriticWorker(Worker):
         self.config.forward_micro_batch_size //= (torch.distributed.get_world_size() //
                                                   self.ulysses_sequence_parallel_size)
 
-    def _build_critic_model_optimizer(self, config):
+    def _build_critic_model_optimizer(self, config, checkpoint_path=None):
         # the following line is necessary
+        import os
         from verl.utils.model import LambdaLayer, print_model_size, squeeze
         from verl.utils.torch_dtypes import PrecisionType
         from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy, MixedPrecision
         from torch import optim
 
-        local_path = copy_local_path_from_hdfs(config.model.path)
+        # use checkpoint path if provided, otherwise use original model path
+        if checkpoint_path:
+            local_path = checkpoint_path
+            print(f'Loading critic model from checkpoint: {local_path}')
+        else:
+            local_path = copy_local_path_from_hdfs(config.model.path)
+        
         # note that the tokenizer between actor and critic may be different. So override tokenizer info with actor info
         # using random initialized model from any architecture. May not be the same as Actor.
 
-        tokenizer_path = copy_local_path_from_hdfs(config.model.tokenizer_path)
+        # use tokenizer from checkpoint if available, otherwise use original tokenizer path
+        if checkpoint_path and os.path.exists(os.path.join(checkpoint_path, 'tokenizer.json')):
+            tokenizer_path = checkpoint_path
+        else:
+            tokenizer_path = copy_local_path_from_hdfs(config.model.tokenizer_path)
+            
         self.tokenizer = hf_tokenizer(tokenizer_path, trust_remote_code=config.model.get('trust_remote_code', False))
 
         from omegaconf import OmegaConf
@@ -653,9 +690,32 @@ class CriticWorker(Worker):
         # This is used to import external_lib into the huggingface systems
         import_external_libs(self.config.model.get('external_lib', None))
 
+        # check for checkpoint
+        import os
+        import re
+        checkpoint_dir = os.path.join('checkpoints/TinyZero/critic')
+        latest_checkpoint = None
+        
+        if os.path.exists(checkpoint_dir):
+            # find all global_step directories
+            step_pattern = re.compile(r'global_step_(\d+)')
+            steps = []
+            
+            for dir_name in os.listdir(checkpoint_dir):
+                match = step_pattern.match(dir_name)
+                if match:
+                    steps.append(int(match.group(1)))
+            
+            if steps:
+                latest_step = max(steps)
+                latest_checkpoint = os.path.join(checkpoint_dir, f'global_step_{latest_step}')
+                print(f'Found latest critic checkpoint: {latest_checkpoint}')
+
         from verl.workers.critic import DataParallelPPOCritic
+        
+        # pass checkpoint path to _build_critic_model_optimizer
         self.critic_module, self.critic_optimizer, self.critic_lr_scheduler = self._build_critic_model_optimizer(
-            self.config)
+            self.config, checkpoint_path=latest_checkpoint)
 
         if self._is_offload_param:
             offload_fsdp_param_and_grad(module=self.critic_module, offload_grad=self._is_offload_grad)

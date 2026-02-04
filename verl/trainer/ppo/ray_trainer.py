@@ -337,7 +337,33 @@ class RayPPOTrainer(object):
         else:
             self.kl_ctrl = core_algos.FixedKLController(kl_coef=0.)
 
+        # check for latest checkpoint
+        self.latest_checkpoint_step = self._find_latest_checkpoint()
+        print(f'Found latest checkpoint at step: {self.latest_checkpoint_step}')
+
         self._create_dataloader()
+
+    def _find_latest_checkpoint(self):
+        """Find the latest checkpoint step"""
+        import os
+        import re
+        
+        checkpoint_dir = os.path.join(self.config.trainer.default_local_dir, 'actor')
+        if not os.path.exists(checkpoint_dir):
+            return None
+        
+        # find all global_step directories
+        step_pattern = re.compile(r'global_step_(\d+)')
+        steps = []
+        
+        for dir_name in os.listdir(checkpoint_dir):
+            match = step_pattern.match(dir_name)
+            if match:
+                steps.append(int(match.group(1)))
+        
+        if steps:
+            return max(steps)
+        return None
 
     def _create_dataloader(self):
         from torch.utils.data import DataLoader
@@ -558,19 +584,25 @@ class RayPPOTrainer(object):
                           default_backend=self.config.trainer.logger,
                           config=OmegaConf.to_container(self.config, resolve=True))
 
-        self.global_steps = 0
+        # initialize global_steps from latest checkpoint if available
+        if self.latest_checkpoint_step is not None:
+            self.global_steps = self.latest_checkpoint_step
+            print(f'Resuming training from step {self.global_steps}')
+        else:
+            self.global_steps = 0
 
-        # perform validation before training
+        # perform validation before training only if starting from scratch
         # currently, we only support validation using the reward_function.
-        if self.val_reward_fn is not None and self.config.trainer.get('val_before_train', True):
+        if self.latest_checkpoint_step is None and self.val_reward_fn is not None and self.config.trainer.get('val_before_train', True):
             val_metrics = self._validate()
             pprint(f'Initial validation metrics: {val_metrics}')
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get('val_only', False):
                 return
 
-        # we start from step 1
-        self.global_steps += 1
+        # we start from step 1 if no checkpoint, or continue from current step
+        if self.latest_checkpoint_step is None:
+            self.global_steps += 1
 
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
